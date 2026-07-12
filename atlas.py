@@ -7,7 +7,8 @@ Commands:
   validate  Check ATLAS/modules/generated consistency
   outline   Print outline for a single file (debug)
 
-Designed to be copied into any repository under tools/code-atlas/.
+Install system-wide via ./install.sh (puts `atlas` on PATH and installs
+the Grok skill /create-code-atlas). Can also be vendored as tools/code-atlas/.
 No third-party dependencies.
 """
 
@@ -923,7 +924,7 @@ def cmd_gen(cfg: AtlasConfig) -> int:
     unmapped_hot = [h.rel for h in hot if not h.module and cfg.modules]
     meta = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "tool": "tools/code-atlas/atlas.py",
+        "tool": "code-atlas/atlas.py",
         "root": str(cfg.root),
         "config": str(cfg.config_path) if cfg.config_path else None,
         "file_count": len(files),
@@ -1018,8 +1019,8 @@ def cmd_init(cfg: AtlasConfig, force: bool = False, modules: list[str] | None = 
     print("Next:")
     print(f"  1. Edit {cfg.map_dir / 'ATLAS.md'} (modules, intents, landmines)")
     print(f"  2. Edit {cfg_path} module path globs")
-    print(f"  3. python3 tools/code-atlas/atlas.py gen")
-    print(f"  4. python3 tools/code-atlas/atlas.py validate")
+    print("  3. atlas gen")
+    print("  4. atlas validate")
     print(f"  5. Paste {cfg.map_dir / 'L0-snippet.md'} into project-context / AGENTS.md")
     return 0
 

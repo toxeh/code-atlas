@@ -52,11 +52,11 @@ follow_dir_symlinks: false
 Recommended: put the CLI on your PATH once, then use it in any repo.
 
 ```bash
-# from the toolkit directory
-./tools/code-atlas/install.sh
+# from this repository root
+./install.sh
 
 # or explicitly
-./tools/code-atlas/install.sh --prefix "$HOME/.local"
+./install.sh --prefix "$HOME/.local"
 ```
 
 What it installs:
@@ -65,18 +65,44 @@ What it installs:
 |---|---|
 | `~/.local/share/code-atlas/` | toolkit copy (templates + `atlas.py`) |
 | `~/.local/bin/atlas` | launcher on PATH |
+| `~/.grok/skills/create-code-atlas/SKILL.md` | global Grok skill `/create-code-atlas` |
 
 Dev mode (live symlink to this checkout instead of copy):
 
 ```bash
-./tools/code-atlas/install.sh --link
+./install.sh --link
 ```
 
 Uninstall:
 
 ```bash
-./tools/code-atlas/install.sh --uninstall
+./install.sh --uninstall
 ```
+
+### Grok skill
+
+`install.sh` also installs a **user-scoped** Grok skill:
+
+```text
+~/.grok/skills/create-code-atlas/SKILL.md
+```
+
+Invoke in Grok:
+
+```text
+/create-code-atlas
+/create-code-atlas auth api worker
+```
+
+Or by intent: “создай атлас”, “bootstrap docs/map”, “code map for agents”.
+
+Verify discovery:
+
+```bash
+grok inspect --json | python3 -c 'import sys,json; print([s for s in json.load(sys.stdin).get("skills",[]) if s.get("name")=="create-code-atlas"])'
+```
+
+Source of the skill in this repo: [`skills/create-code-atlas/SKILL.md`](skills/create-code-atlas/SKILL.md).
 
 If `~/.local/bin` is not on PATH (zsh):
 
@@ -95,11 +121,14 @@ atlas --help
 ## Install into a repo (vendored copy, no global CLI)
 
 ```bash
-# from your repo root
+# from your target repo root
 mkdir -p tools
-cp -R /path/to/this/code-atlas tools/code-atlas
+cp -R /path/to/code-atlas tools/code-atlas
 # or submodule / subtree — your choice
+python3 tools/code-atlas/atlas.py --help
 ```
+
+Prefer the system install (`./install.sh`) when you use Atlas across many repos.
 
 ## Bootstrap atlas in a repository
 
@@ -108,7 +137,7 @@ After system or vendored install:
 ```bash
 cd /path/to/your/project
 atlas init
-# or: python3 tools/code-atlas/atlas.py init
+# or vendored: python3 tools/code-atlas/atlas.py init
 
 atlas init --module auth --module api --module worker
 # edit docs/map/ATLAS.md + modules/*.md + atlas.config.yaml
@@ -231,8 +260,9 @@ If a PR moves public entrypoints or module boundaries, it must update:
 Optionally run in CI:
 
 ```bash
-python3 tools/code-atlas/atlas.py gen
-python3 tools/code-atlas/atlas.py validate
+atlas gen && atlas validate
+# or vendored:
+# python3 tools/code-atlas/atlas.py gen && python3 tools/code-atlas/atlas.py validate
 ```
 
 ## Design constraints
@@ -244,11 +274,15 @@ python3 tools/code-atlas/atlas.py validate
 ## Layout of this toolkit
 
 ```text
-tools/code-atlas/
-  atlas.py              # CLI
+code-atlas/                 # this repository
+  atlas.py                  # CLI
+  install.sh                # system install + Grok skill
   config.example.yaml
   README.md
-  agent-skill.md
+  agent-skill.md            # navigate protocol for agents
+  skills/
+    create-code-atlas/      # global Grok skill source
+      SKILL.md
   templates/
     ATLAS.md
     module.md

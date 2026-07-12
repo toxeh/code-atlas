@@ -7,7 +7,7 @@ description: >-
   docs/map, project map for agents, bootstrap code-atlas, or runs
   /create-code-atlas. Also use when agents get lost in large/monolithic codebases
   and need a first-door map.
-compatibility: Requires Python 3.10+ and the `atlas` CLI (or tools/code-atlas/atlas.py).
+compatibility: Requires Python 3.10+ and the `atlas` CLI (from code-atlas install.sh or ~/.local/share/code-atlas/atlas.py).
 metadata:
   short-description: "Bootstrap Code Atlas for a repo"
   author: ToxeH
@@ -39,14 +39,12 @@ command -v atlas || true
 atlas --help || python3 "${ATLAS_HOME:-$HOME/.local/share/code-atlas}/atlas.py" --help
 ```
 
-If missing, install from the toolkit (when present in the monorepo) or known install path:
+If missing, install from the **code-atlas** checkout:
 
 ```bash
-# preferred if toolkit is in the current repo
-./tools/code-atlas/install.sh
-
-# or absolute if you know the source checkout
-# /path/to/ai-proxy/tools/code-atlas/install.sh
+# system install (CLI + this Grok skill)
+/path/to/code-atlas/install.sh
+# e.g. ~/dev/code-atlas/install.sh
 ```
 
 Prefer the `atlas` command on PATH after install (`~/.local/bin/atlas`).

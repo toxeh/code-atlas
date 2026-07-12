@@ -59,8 +59,8 @@ Reach the correct edit site with minimal tool calls: **door → card → symbol 
    If entrypoints/module boundaries moved: update ATLAS/card and run:
 
    ```bash
-   python3 tools/code-atlas/atlas.py gen
-   python3 tools/code-atlas/atlas.py validate
+   atlas gen
+   atlas validate
    ```
 
 9. **Atlas debt**  
@@ -82,7 +82,7 @@ Reach the correct edit site with minimal tool calls: **door → card → symbol 
 2. Optionally bootstrap:
 
    ```bash
-   python3 tools/code-atlas/atlas.py init
+   atlas init
    ```
 
 3. For the current task, fall back to: package README → entrypoints (`main`, routes, plugin.xml) → tests → narrow reads.  
