@@ -1,0 +1,100 @@
+# Code Atlas generator config
+# Copy to docs/map/atlas.config.yaml (or pass --config)
+
+root: .
+
+map_dir: docs/map
+generated_dir: docs/map/generated
+modules_dir: docs/map/modules
+
+exclude:
+  - "**/.git/**"
+  - "**/.hg/**"
+  - "**/.svn/**"
+  - "**/node_modules/**"
+  - "**/vendor/**"
+  - "**/dist/**"
+  - "**/build/**"
+  - "**/.gradle/**"
+  - "**/.idea/**"
+  - "**/.venv/**"
+  - "**/venv/**"
+  - "**/__pycache__/**"
+  - "**/target/**"
+  - "**/bin/**"
+  - "**/obj/**"
+  - "**/.tox/**"
+  - "**/coverage/**"
+  - "**/docs/map/generated/**"
+  - "**/*.min.js"
+  - "**/*.min.css"
+  - "**/*.map"
+  - "**/*.lock"
+  - "**/go.sum"
+  - "**/package-lock.json"
+  - "**/pnpm-lock.yaml"
+  - "**/yarn.lock"
+  - "**/Cargo.lock"
+
+# Only index these extensions (empty = common source set)
+include_extensions:
+  - .go
+  - .py
+  - .pyi
+  - .js
+  - .jsx
+  - .ts
+  - .tsx
+  - .mjs
+  - .cjs
+  - .java
+  - .kt
+  - .kts
+  - .rs
+  - .c
+  - .h
+  - .cc
+  - .cpp
+  - .hpp
+  - .cs
+  - .rb
+  - .php
+  - .swift
+  - .scala
+  - .sh
+  - .bash
+  - .zsh
+  - .sql
+  - .proto
+  - .graphql
+  - .vue
+  - .svelte
+
+thresholds:
+  outline_min_lines: 200
+  hot_files_top: 30
+  max_symbols_per_file: 200
+  module_card_soft_max_lines: 120
+
+# Map path globs → module ids (used for symbols/hot-files tagging).
+# Order matters: first match wins.
+# Leave empty until you cut modules; then uncomment / add entries.
+modules:
+  # auth:
+  #   paths:
+  #     - "**/auth/**"
+  #     - "**/identity/**"
+  # api:
+  #   paths:
+  #     - "**/api/**"
+  #     - "**/handlers/**"
+
+# Optional: rank hot files also by recent git churn (requires git).
+use_git_churn: true
+git_churn_max_commits: 200
+
+# Follow directory symlinks (default: true).
+# Example: ai-proxy/claudia -> /Volumes/.../claudia
+# Indexed paths stay logical: claudia/src/..., not the realpath target.
+# Cycle-safe (realpath of entered dirs is tracked).
+follow_dir_symlinks: true
