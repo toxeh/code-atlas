@@ -94,7 +94,7 @@ use_git_churn: true
 git_churn_max_commits: 200
 
 # Follow directory symlinks (default: true).
-# Example: ai-proxy/claudia -> /Volumes/.../claudia
-# Indexed paths stay logical: claudia/src/..., not the realpath target.
+# Example: repo/plugin -> /other/plugin
+# Indexed paths stay logical: plugin/src/..., not the realpath target.
 # Cycle-safe (realpath of entered dirs is tracked).
 follow_dir_symlinks: true

@@ -221,8 +221,8 @@ x
         rc = atlas.main(["--root", str(self.repo), "validate"])
         self.assertEqual(rc, 1)
 
-    def test_follow_dir_symlink_like_claudia(self) -> None:
-        """Directory symlink mount: repo/plugin -> external tree (ai-proxy/claudia pattern)."""
+    def test_follow_dir_symlink(self) -> None:
+        """Directory symlink mount: repo/plugin -> external tree."""
         external = self.tmp / "external_project"
         (external / "src").mkdir(parents=True)
         (external / "src" / "main.go").write_text(
@@ -518,7 +518,7 @@ class AtlasChurnTest(unittest.TestCase):
                 "public class Bar {\n    public void b() {}\n}\n",
                 encoding="utf-8",
             )
-            (root / "smev").symlink_to(external, target_is_directory=True)
+            (root / "mounted").symlink_to(external, target_is_directory=True)
             (root / "loose").symlink_to(plain, target_is_directory=True)
             cfg = _write_config(
                 root,
@@ -529,9 +529,9 @@ thresholds:
   hot_files_top: 50
   max_symbols_per_file: 50
 modules:
-  smev:
+  mounted:
     paths:
-      - "smev/**"
+      - "mounted/**"
   loose:
     paths:
       - "loose/**"
@@ -549,13 +549,13 @@ follow_dir_symlinks: true
                 (root / "docs" / "map" / "generated" / "hot-files.json").read_text(encoding="utf-8")
             )
             by_file = {row["file"]: row for row in hot}
-            self.assertIn("smev/connector/Foo.java", by_file)
-            self.assertGreaterEqual(by_file["smev/connector/Foo.java"]["churn"], 1)
+            self.assertIn("mounted/connector/Foo.java", by_file)
+            self.assertGreaterEqual(by_file["mounted/connector/Foo.java"]["churn"], 1)
             self.assertEqual(by_file["src/LongUntouched.java"]["churn"], 0)
             self.assertEqual(by_file["loose/src/Bar.java"]["churn"], 0)
             self.assertGreaterEqual(by_file["src/RootTouched.java"]["churn"], 1)
             order = [row["file"] for row in hot]
-            self.assertLess(order.index("smev/connector/Foo.java"), order.index("src/LongUntouched.java"))
+            self.assertLess(order.index("mounted/connector/Foo.java"), order.index("src/LongUntouched.java"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

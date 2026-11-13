@@ -79,7 +79,8 @@ else
     --exclude '.DS_Store' \
     --exclude 'tests/fixtures/sample_repo/docs/' \
     "$SRC_DIR/" "$SHARE_DIR/"
-  chmod +x "$SHARE_DIR/atlas.py" "$SHARE_DIR/install.sh" 2>/dev/null || true
+  chmod +x "$SHARE_DIR/atlas.py" "$SHARE_DIR/install.sh" \
+    "$SHARE_DIR/ci/publish-atlas.sh" "$SHARE_DIR/sandbox/prepare.sh" 2>/dev/null || true
   echo "installed toolkit: $SHARE_DIR"
 fi
 
@@ -128,8 +129,8 @@ case ":$PATH:" in
     ;;
   *)
     echo ""
-    echo "Add to PATH (zsh):"
-    echo "  echo 'export PATH=\"$BIN_DIR:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+    echo "Add to PATH in your shell startup file:"
+    echo "  export PATH=\"$BIN_DIR:\$PATH\""
     ;;
 esac
 

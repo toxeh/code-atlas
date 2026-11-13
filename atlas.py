@@ -239,8 +239,8 @@ class AtlasConfig:
     modules: dict[str, list[str]]  # module_id -> path globs
     use_git_churn: bool = True
     git_churn_max_commits: int = 200
-    # Follow directory symlinks (e.g. ./claudia -> /other/claudia).
-    # Index paths stay logical under root (claudia/...), not the realpath target.
+    # Follow directory symlinks (e.g. ./plugin -> /other/plugin).
+    # Index paths stay logical under root (plugin/...), not the realpath target.
     follow_dir_symlinks: bool = True
     config_path: Path | None = None
 
@@ -790,8 +790,8 @@ def _real_key(path: Path) -> str | None:
 def walk_source_tree(cfg: AtlasConfig) -> WalkResult:
     """Walk repo with optional directory-symlink following.
 
-    Paths are reported as *logical* paths under cfg.root, e.g. ``claudia/src/...``
-    even when ``claudia`` is a symlink to an external tree (ai-proxy/claudia pattern).
+    Paths are reported as *logical* paths under cfg.root, e.g. ``plugin/src/...``
+    even when ``plugin`` is a symlink to an external tree.
     Cycle-safe via realpath of entered directories.
     """
     excl = PathMatcher(cfg.exclude)

@@ -2,8 +2,7 @@
 
 Portable toolkit for building a **Code Atlas** in any repository: a hierarchical navigation index for humans and AI agents.
 
-> Spec: see conversation artifact `code_atlas_spec.md` (universal requirements).  
-> This directory is the **implementation** you can copy into any project.
+This directory is the **implementation** you can copy into any project.
 
 ## Why
 
@@ -30,15 +29,15 @@ Atlas answers **“where do I look first?”** before code is opened.
 - Optional: `git` for churn-based hot-file ranking
 - Optional: `rsync` for `install.sh` copy mode (macOS/Linux usually have it)
 
-### Directory symlinks (e.g. `./claudia`)
+### Directory symlinks (e.g. `./plugin`)
 
 By default (`follow_dir_symlinks: true`) Atlas **enters directory symlinks** such as:
 
 ```text
-ai-proxy/claudia -> /Volumes/.../claudia
+repo/plugin -> /other/plugin
 ```
 
-Indexed paths stay **logical** under the repo root (`claudia/src/...`), not the realpath target.  
+Indexed paths stay **logical** under the repo root (`plugin/src/...`), not the realpath target.  
 Mounts are recorded in `generated/meta.json` as `symlink_mounts`. Cycle-safe via realpath of entered dirs.
 
 Disable if needed:
@@ -104,10 +103,10 @@ grok inspect --json | python3 -c 'import sys,json; print([s for s in json.load(s
 
 Source of the skill in this repo: [`skills/create-code-atlas/SKILL.md`](skills/create-code-atlas/SKILL.md).
 
-If `~/.local/bin` is not on PATH (zsh):
+If `~/.local/bin` is not on PATH, add it in your shell startup file:
 
 ```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 Smoke:
@@ -265,13 +264,37 @@ If a PR moves public entrypoints or module boundaries, it must update:
 - Intent row and/or module card
 - module globs in `atlas.config.yaml` when paths change
 
-Optionally run in CI:
+On a merge request, rebuild and validate without committing the index:
 
 ```bash
 atlas gen && atlas validate
-# or vendored:
-# python3 tools/code-atlas/atlas.py gen && python3 tools/code-atlas/atlas.py validate
 ```
+
+## Closed GitLab
+
+The hand-written map stays in the product repository and is reviewed with the change. Generated files are not committed there. A sibling GitLab project holds a snapshot of `main`: `docs/map/`, a `SOURCE` pin (`project`, `sha`, `ref`, `tool_sha`), and `agent-skill.md`.
+
+Product pipeline: include [`ci/gitlab-ci.atlas.yml`](ci/gitlab-ci.atlas.yml).
+
+- `atlas:check` on merge requests runs `gen` and `validate`.
+- `atlas:publish` on the default branch runs [`ci/publish-atlas.sh`](ci/publish-atlas.sh) and pushes the snapshot.
+- Set `ATLAS_PROJECT_PATH` and a masked, protected `ATLAS_PUSH_TOKEN` that can write only to the snapshot project.
+- Allow this project's CI job token to clone the toolkit project (`ATLAS_TOOL_PROJECT`, default `tools/code-atlas`).
+- Shell runners need `python3`, `git`, and `bash`. Docker runners override `image` with an internal image. The include sets no image.
+
+Publishing the same source commit again does not push when the index differs only by `meta.json` `generated_at` and the absolute `root` path.
+
+Sandbox, before the agent reads code:
+
+```bash
+sandbox/prepare.sh \
+  --work /work/task \
+  --src https://gitlab.example/group/name.git \
+  --atlas https://gitlab.example/group/name-atlas.git \
+  --ref main
+```
+
+The agent works in `/work/task/src`. Open `/work/task/READY` for the mode (`reuse-l3`, `overlay-published`, `regen-l3`, `regen-published-hand`). The script does not push. When the source ref is not the published commit, it keeps that ref's `ATLAS.md` if present and rebuilds L3 locally.
 
 ## Design constraints
 
@@ -296,8 +319,14 @@ code-atlas/                 # this repository
     module.md
     L0-snippet.md
     map-README.md
+  ci/
+    gitlab-ci.atlas.yml    # include from a product repo
+    publish-atlas.sh        # gen, validate, push snapshot
+  sandbox/
+    prepare.sh              # clone source + snapshot into one tree
   tests/
     test_atlas.py
+    test_closed_loop.py
     fixtures/sample_repo/
 ```
 

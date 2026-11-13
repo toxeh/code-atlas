@@ -82,3 +82,4 @@ config.local.yaml
 *.log
 tmp/
 temp/
+/.aiforopenide/

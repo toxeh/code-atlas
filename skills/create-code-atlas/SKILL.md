@@ -80,7 +80,7 @@ find . -type f \( -name '*.go' -o -name '*.py' -o -name '*.ts' -o -name '*.tsx' 
   -not -path '*/.git/*' -not -path '*/node_modules/*' -not -path '*/vendor/*' -not -path '*/dist/*' -not -path '*/build/*' \
   -print0 2>/dev/null | xargs -0 wc -l 2>/dev/null | sort -n | tail -30
 
-# directory symlinks (must be supported; e.g. ./claudia -> external tree)
+# directory symlinks (must be supported; e.g. ./plugin -> external tree)
 find . -maxdepth 2 -type l -ls 2>/dev/null | head -30
 
 # entrypoints heuristics
@@ -90,7 +90,7 @@ rg -n --glob '!**/node_modules/**' --glob '!**/.git/**' 'func main\(|^def main\(
 Infer **change-boundary modules** (what is edited together), not every package:
 
 - services / binaries / plugin surfaces
-- major domains (auth, api, ui, worker, proxy, …)
+- major domains (auth, api, ui, worker, billing, …)
 - symlink mounts that act as subprojects
 
 If the user passed module ids as arguments to `/create-code-atlas`, prefer those names.
@@ -117,20 +117,20 @@ Do **not** use `--force` unless the user explicitly asks to overwrite existing a
 Edit `docs/map/atlas.config.yaml`:
 
 - Map each module id → path globs (first match wins)
-- Keep `follow_dir_symlinks: true` (default) so mounts like `./claudia` are indexed as logical `claudia/...`
+- Keep `follow_dir_symlinks: true` (default) so mounts like `./plugin` are indexed as logical `plugin/...`
 - Set `use_git_churn: true` when `.git` exists
 
 Example shape:
 
 ```yaml
 modules:
-  claudia:
+  plugin:
     paths:
-      - "claudia/**"
-  proxy:
+      - "plugin/**"
+  api:
     paths:
-      - "**/local-proxy/**"
-      - "**/remote-proxy/**"
+      - "**/api/**"
+      - "**/handlers/**"
 follow_dir_symlinks: true
 use_git_churn: true
 ```
@@ -241,8 +241,8 @@ When `docs/map/ATLAS.md` exists:
 ## Hard rules
 
 - **Intent is hand-written; inventory is generated.** Never hand-edit `docs/map/generated/**`.
-- **Follow directory symlinks** by default (`follow_dir_symlinks: true`) — support mounts like `./claudia`.
-- Index paths must stay **logical** (`claudia/src/...`), not external realpaths.
+- **Follow directory symlinks** by default (`follow_dir_symlinks: true`) — support mounts like `./plugin`.
+- Index paths must stay **logical** (`plugin/src/...`), not external realpaths.
 - Do not invent business architecture essays.
 - Do not full-file-read multi-hundred-line sources while building the atlas; use outlines after first `gen` when possible.
 - Prefer ≤ 3–10 modules on first bootstrap; expand later.

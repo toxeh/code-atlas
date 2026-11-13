@@ -1,0 +1,85 @@
+# Code Atlas jobs for a product repository in a closed GitLab.
+#
+# Hand-written map (ATLAS.md, module cards, atlas.config.yaml) stays in the
+# product repo and is reviewed with the merge request. These jobs rebuild L3
+# in the job workspace. They do not commit it back to the product.
+# atlas:publish copies the map to a sibling snapshot project.
+#
+# Include from the product repo:
+#
+#   include:
+#     - project: tools/code-atlas
+#       file: /ci/gitlab-ci.atlas.yml
+#       ref: main
+#
+# Project CI/CD variables:
+#   ATLAS_PROJECT_PATH   snapshot path, e.g. group/name-atlas
+#                        must not be the product path
+#   ATLAS_PUSH_TOKEN     masked + protected; write access to the snapshot only
+#   ATLAS_TOOL_PROJECT   toolkit path (default tools/code-atlas)
+#   ATLAS_TOOL_REF       toolkit ref (default main)
+#   ATLAS_BRANCH         snapshot branch (default main)
+#
+# The toolkit project must allow this project's CI job token to clone it.
+# Shell runners need python3, git, and bash on PATH.
+# Docker runners: override image on both jobs with an internal image that
+# has those tools. This file sets no image, so it does not pull from Docker Hub.
+#
+#   atlas:check:
+#     image: registry.internal/ci/atlas:1
+#   atlas:publish:
+#     image: registry.internal/ci/atlas:1
+#
+# An image may bake the toolkit at /opt/code-atlas instead of cloning it.
+# Or set ATLAS_TOOL_DIR to a preinstalled checkout.
+
+.atlas_fetch:
+  before_script:
+    - |
+      set -euo pipefail
+      if [[ -n "${ATLAS_TOOL_DIR:-}" && -f "${ATLAS_TOOL_DIR}/atlas.py" ]]; then
+        tool="$ATLAS_TOOL_DIR"
+      elif [[ -f /opt/code-atlas/atlas.py ]]; then
+        tool="/opt/code-atlas"
+      else
+        : "${CI_SERVER_HOST:?}"
+        : "${CI_JOB_TOKEN:?}"
+        tool="$(mktemp -d)"
+        git clone --depth 1 --branch "${ATLAS_TOOL_REF:-main}" \
+          "https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/${ATLAS_TOOL_PROJECT:-tools/code-atlas}.git" \
+          "$tool"
+      fi
+      printf 'export ATLAS_TOOL_DIR=%q\n' "$tool" > "$CI_PROJECT_DIR/.atlas-tool.env"
+
+atlas:check:
+  extends: .atlas_fetch
+  stage: .post
+  variables:
+    # git_churn_max_commits default is 200. Keep the clone at least that deep
+    # so hot-file ranking sees the same window as a full checkout.
+    GIT_DEPTH: "200"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  script:
+    - |
+      set -euo pipefail
+      # shellcheck disable=SC1091
+      . "$CI_PROJECT_DIR/.atlas-tool.env"
+      python3 "$ATLAS_TOOL_DIR/atlas.py" --root "$CI_PROJECT_DIR" gen
+      python3 "$ATLAS_TOOL_DIR/atlas.py" --root "$CI_PROJECT_DIR" validate
+
+atlas:publish:
+  extends: .atlas_fetch
+  stage: .post
+  resource_group: code-atlas-publish
+  variables:
+    GIT_DEPTH: "200"
+    ATLAS_BRANCH: "main"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - |
+      set -euo pipefail
+      # shellcheck disable=SC1091
+      . "$CI_PROJECT_DIR/.atlas-tool.env"
+      bash "$ATLAS_TOOL_DIR/ci/publish-atlas.sh"
