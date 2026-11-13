@@ -37,9 +37,10 @@ Reach the correct edit site with minimal tool calls: **door → card → symbol 
 
 4. **L3 symbols/outlines (if file may be large)**  
    Prefer:
-   - `docs/map/generated/symbols.tsv` or `symbols.json`
-   - `docs/map/generated/outlines.md`
-   - `docs/map/generated/hot-files.json`
+   - `atlas find <Symbol>`
+   - `docs/map/generated/modules/<id>-symbols.tsv`
+
+   Full dumps `symbols.json`, `symbols.tsv`, and `outlines.md` are the complete index. Do not open them whole.
 
    Jump by symbol name → file:line.
 

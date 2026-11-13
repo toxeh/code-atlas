@@ -178,12 +178,16 @@ Soft cap: ~1 screen / ≤ ~120 lines. Split modules if a card balloons.
 ```bash
 atlas gen
 atlas validate
+atlas find <Symbol>
 ```
+
+`atlas gen` writes `owner`, `signature`, and `role` on each symbol. Main rows land in `docs/map/generated/modules/<id>-symbols.tsv`. Test rows (`src/test`, `src/it`) land in `<id>-tests-symbols.tsv`. Query with `atlas find` instead of opening the monolith.
 
 Expect:
 
 - `docs/map/generated/tree.txt`
 - `hot-files.json`, `outlines.md`, `symbols.json`, `symbols.tsv`, `meta.json`
+- `modules/<id>-symbols.tsv` and `modules/<id>-tests-symbols.tsv`
 - `meta.json.symlink_mounts` lists directory symlink mounts when present
 
 Fix **errors** from validate (missing cards, missing concrete paths, missing sections). Warnings about unmapped hot files → improve module globs or cards.

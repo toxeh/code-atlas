@@ -179,7 +179,11 @@ atlas init --module auth --module api --module worker
 # 3) Generate L3
 atlas gen
 
-# 4) Validate
+# 4) Query the index (prefer this over opening symbols.json)
+atlas find greet
+atlas find greet --module billing
+
+# 5) Validate
 atlas validate
 
 # Debug outline for one file
@@ -202,7 +206,11 @@ Under `docs/map/generated/`:
 | `tree.txt` | all indexed files + line counts + module |
 | `hot-files.json` | top files by size/churn |
 | `outlines.md` | definition outlines for large files |
-| `symbols.json` / `symbols.tsv` | jump table symbol → file:line |
+| `symbols.json` / `symbols.tsv` | full jump table symbol → file:line. Columns are `symbol`, `file`, `line`, `kind`, `language`, `module`, `owner`, `signature`, `role`. Do not open the monolith whole; use `atlas find` |
+| `modules/<id>-symbols.tsv` | main-role rows for one module (`owner`, `signature`, `role`) |
+| `modules/<id>-tests-symbols.tsv` | test-role rows (`src/test` and `src/it`); header only when the module has no tests |
+| `modules/<id>-outlines.md` | main-role outlines for one module |
+| `modules/<id>-tests-outlines.md` | test-role outlines for one module |
 | `meta.json` | timestamp, counts, warnings |
 
 ## Agent protocol (mandatory)

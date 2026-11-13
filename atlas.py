@@ -6,6 +6,7 @@ Commands:
   gen       Generate L3 index (tree, hot files, outlines, symbols)
   validate  Check ATLAS/modules/generated consistency
   outline   Print outline for a single file (debug)
+  find      Print a short symbol hit list from generated/symbols.tsv
 
 Install system-wide via ./install.sh (puts `atlas` on PATH and installs
 the Grok skill /create-code-atlas). Can also be vendored as tools/code-atlas/.
@@ -397,6 +398,8 @@ def should_exclude(rel_posix: str, excl: PathMatcher) -> bool:
 
 @dataclass
 class Symbol:
+    """One indexed definition and, for Java methods, its owner and signature."""
+
     symbol: str
     file: str
     line: int
@@ -404,6 +407,9 @@ class Symbol:
     language: str
     module: str | None = None
     detail: str | None = None
+    owner: str = ""
+    signature: str = ""
+    role: str = ""
 
 
 # language -> list of (kind, regex with group 'name')
@@ -446,9 +452,17 @@ RULES: dict[str, list[tuple[str, re.Pattern[str]]]] = {
         ("enum", re.compile(
             r"^(?:public|protected|private|static|\s)+enum\s+(?P<name>[A-Za-z_]\w*)\b"
         )),
+        ("class", re.compile(
+            r"^\s*(?:(?:public|protected|private|abstract|final|static)\s+)*"
+            r"record\s+(?P<name>[A-Za-z_]\w*)\b"
+        )),
         ("method", re.compile(
             r"^(?:public|protected|private|static|final|synchronized|abstract|default|\s)+"
             r"(?:[\w.<>,\[\]?]+\s+)+(?P<name>[A-Za-z_]\w*)\s*\("
+        )),
+        ("constructor", re.compile(
+            r"^(?:public|protected|private|static|final|synchronized|abstract|default|\s)+"
+            r"(?P<name>[A-Za-z_]\w*)\s*\("
         )),
     ],
     "kotlin": [
@@ -562,7 +576,119 @@ def detect_language(path: Path) -> str:
     return EXT_LANG.get(path.suffix.lower(), "generic")
 
 
+_STATEMENT_LINE = re.compile(r"^(?:throw|return|new|catch|if|for|while|switch|else|case)\b")
+_IDENT = re.compile(r"[A-Za-z_]\w*")
+_JAVA_TYPE_KINDS = {"class", "interface", "enum"}
+_SKIP_SYMBOL_NAMES = {"if", "for", "while", "switch", "catch", "return"}
+
+
+def _source_role(rel: str) -> str:
+    posix = "/" + rel.replace("\\", "/").lstrip("/")
+    if "/src/test/" in posix or "/src/it/" in posix:
+        return "test"
+    return "main"
+
+
+def _line_indent(stripped: str) -> int:
+    return len(stripped) - len(stripped.lstrip(" \t"))
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    parts: list[str] = []
+    buf: list[str] = []
+    angle = 0
+    paren = 0
+    for ch in text:
+        if ch == "<":
+            angle += 1
+        elif ch == ">":
+            angle = max(0, angle - 1)
+        elif ch == "(":
+            paren += 1
+        elif ch == ")":
+            paren = max(0, paren - 1)
+        elif ch == "," and angle == 0 and paren == 0:
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    tail = "".join(buf).strip()
+    if tail:
+        parts.append(tail)
+    return parts
+
+
+def _param_type(part: str) -> str:
+    idents = list(_IDENT.finditer(part))
+    if len(idents) <= 1:
+        return part.strip()
+    return part[: idents[-1].start()].strip()
+
+
+def _java_signature(name: str, line: str) -> str:
+    start = line.find("(")
+    if start < 0:
+        return f"{name}()"
+    depth = 0
+    end: int | None = None
+    for index in range(start, len(line)):
+        ch = line[index]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                end = index
+                break
+    if end is None:
+        return f"{name}()"
+    inner = line[start + 1 : end].strip()
+    if not inner:
+        return f"{name}()"
+    types = [_param_type(part) for part in _split_top_level_commas(inner)]
+    return f"{name}({', '.join(types)})"
+
+
+class _SymbolBatch(list):
+    def __init__(self) -> None:
+        super().__init__()
+        self.truncated = False
+
+
+def _java_owner(
+    lang: str,
+    kind: str,
+    name: str,
+    indent: int,
+    type_stack: list[tuple[int, str]],
+) -> tuple[str, str]:
+    """Return owner and possibly constructor kind for one matched line."""
+    if lang == "java" and kind in _JAVA_TYPE_KINDS:
+        while type_stack and type_stack[-1][0] >= indent:
+            type_stack.pop()
+        owner = "" if indent == 0 or not type_stack else type_stack[-1][1]
+        type_stack.append((indent, name))
+        return owner, kind
+    if kind not in {"method", "constructor"}:
+        return "", kind
+    owner = ""
+    if lang == "java":
+        for type_indent, type_name in reversed(type_stack):
+            if type_indent < indent:
+                owner = type_name
+                break
+        if kind == "method" and owner and name == owner:
+            kind = "constructor"
+    return owner, kind
+
+
 def extract_symbols(path: Path, rel: str, text: str, max_symbols: int) -> list[Symbol]:
+    """Extract definition symbols from one source file.
+
+    Call and keyword lines are not symbols. Java methods keep an owner and a
+    parameter-type signature. The list has truncated=True when a later hit was
+    dropped at max_symbols.
+    """
     lang = detect_language(path)
     rules = RULES.get(lang, []) + (RULES["generic"] if lang != "generic" else [])
     # de-dupe rules by pattern string while preserving order
@@ -575,25 +701,45 @@ def extract_symbols(path: Path, rel: str, text: str, max_symbols: int) -> list[S
         seen_pat.add(key)
         uniq_rules.append((kind, rx))
 
-    out: list[Symbol] = []
+    out = _SymbolBatch()
+    type_stack: list[tuple[int, str]] = []
+    role = _source_role(rel)
     # Skip huge lines / binary-ish
     for i, line in enumerate(text.splitlines(), start=1):
+        if out.truncated:
+            break
         if len(line) > 400:
             continue
         stripped = line.rstrip()
-        if not stripped:
+        if not stripped or _STATEMENT_LINE.match(stripped.lstrip()):
             continue
         for kind, rx in uniq_rules:
-            m = rx.match(stripped)
-            if not m:
+            matched = rx.match(stripped)
+            if not matched:
                 continue
-            name = m.groupdict().get("name") or m.group(0)
-            name = name.strip()
-            if not name or name in {"if", "for", "while", "switch", "catch", "return"}:
+            name = (matched.groupdict().get("name") or matched.group(0)).strip()
+            if not name or name in _SKIP_SYMBOL_NAMES:
                 continue
-            out.append(Symbol(symbol=name, file=rel, line=i, kind=kind, language=lang))
-            break
-        if len(out) >= max_symbols:
+            if len(out) >= max_symbols:
+                out.truncated = True
+                break
+            indent = _line_indent(stripped)
+            owner, kind = _java_owner(lang, kind, name, indent, type_stack)
+            if kind == "constructor" and name != owner:
+                continue
+            signature = _java_signature(name, stripped) if kind in {"method", "constructor"} else ""
+            out.append(
+                Symbol(
+                    symbol=name,
+                    file=rel,
+                    line=i,
+                    kind=kind,
+                    language=lang,
+                    owner=owner,
+                    signature=signature,
+                    role=role,
+                )
+            )
             break
     return out
 
@@ -774,9 +920,32 @@ def git_churn(repo_root: Path, max_commits: int) -> dict[str, int]:
     return dict(counts)
 
 
+def _merge_mount_churn(
+    cfg: AtlasConfig, churn_map: dict[str, int], mounts: list[dict[str, str]]
+) -> None:
+    """Add name-only git counts from each symlink mount that has its own .git."""
+    for mount in mounts:
+        logical = str(mount.get("logical") or "").replace("\\", "/").strip("/")
+        target_text = str(mount.get("target") or "").strip()
+        if not logical or not target_text:
+            continue
+        target = Path(target_text)
+        if not (target / ".git").exists():
+            continue
+        for rel_path, count in git_churn(target, cfg.git_churn_max_commits).items():
+            rel_path = rel_path.replace("\\", "/").strip().lstrip("./")
+            if not rel_path:
+                continue
+            key = f"{logical}/{rel_path}"
+            churn_map[key] = churn_map.get(key, 0) + int(count)
+
+
 def collect_files(cfg: AtlasConfig) -> tuple[list[FileInfo], list[dict[str, str]]]:
+    """Index source files and count churn in the root repo and symlink mounts."""
     churn_map = git_churn(cfg.root, cfg.git_churn_max_commits) if cfg.use_git_churn else {}
     walked = walk_source_tree(cfg)
+    if cfg.use_git_churn:
+        _merge_mount_churn(cfg, churn_map, walked.symlink_mounts)
     files: list[FileInfo] = []
     for path, rel, via_symlink in walked.files:
         files.append(
@@ -838,23 +1007,31 @@ def gen_hot_files_json(hot: list[FileInfo]) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
+def _outline_header(title: str, min_lines: int) -> list[str]:
+    return [
+        f"# Generated outlines — {title} (do not edit)",
+        "",
+        f"Threshold: files with lines >= {min_lines}",
+        "",
+    ]
+
+
 def gen_outlines_and_symbols(
     cfg: AtlasConfig, files: list[FileInfo]
-) -> tuple[str, dict[str, str], list[dict[str, Any]], list[str]]:
+) -> tuple[str, dict[str, str], dict[str, str], list[dict[str, Any]], list[str]]:
+    """Build outlines and symbol rows, splitting each module into main and test."""
+    min_lines = cfg.thresholds.outline_min_lines
     outline_lines: list[str] = [
         "# Generated outlines (do not edit)",
         "",
-        f"Threshold: files with lines >= {cfg.thresholds.outline_min_lines}",
+        f"Threshold: files with lines >= {min_lines}",
         "",
     ]
     mod_outline_map: dict[str, list[str]] = {}
+    mod_test_outline_map: dict[str, list[str]] = {}
     for mid in cfg.modules.keys():
-        mod_outline_map[mid] = [
-            f"# Generated outlines — module {mid} (do not edit)",
-            "",
-            f"Threshold: files with lines >= {cfg.thresholds.outline_min_lines}",
-            "",
-        ]
+        mod_outline_map[mid] = _outline_header(f"module {mid}", min_lines)
+        mod_test_outline_map[mid] = _outline_header(f"module {mid} tests", min_lines)
     symbols: list[dict[str, Any]] = []
     warnings: list[str] = []
 
@@ -867,11 +1044,12 @@ def gen_outlines_and_symbols(
             warnings.append(f"cannot read {f.rel}: {e}")
             continue
         syms = extract_symbols(path, f.rel, text, cfg.thresholds.max_symbols_per_file)
+        truncated = bool(getattr(syms, "truncated", False))
         for s in syms:
             s.module = f.module
             symbols.append(asdict(s))
 
-        if f.lines >= cfg.thresholds.outline_min_lines:
+        if f.lines >= min_lines:
             via = ", via_symlink" if f.via_symlink else ""
             block: list[str] = [
                 f"## {f.rel} ({f.lines} lines, {f.language}, module={f.module or '-'}{via})",
@@ -882,17 +1060,16 @@ def gen_outlines_and_symbols(
             else:
                 for s in syms:
                     block.append(f"- L{s.line}: `{s.kind}` **{s.symbol}**")
+            if truncated:
+                block.append("_truncated at max_symbols_per_file_")
             block.append("")
             outline_lines.extend(block)
             if f.module:
-                if f.module not in mod_outline_map:
-                    mod_outline_map[f.module] = [
-                        f"# Generated outlines — module {f.module} (do not edit)",
-                        "",
-                        f"Threshold: files with lines >= {cfg.thresholds.outline_min_lines}",
-                        "",
-                    ]
-                mod_outline_map[f.module].extend(block)
+                target = mod_test_outline_map if _source_role(f.rel) == "test" else mod_outline_map
+                if f.module not in target:
+                    title = f"module {f.module} tests" if target is mod_test_outline_map else f"module {f.module}"
+                    target[f.module] = _outline_header(title, min_lines)
+                target[f.module].extend(block)
 
     # language coverage warning
     lang_files: dict[str, int] = defaultdict(int)
@@ -908,10 +1085,14 @@ def gen_outlines_and_symbols(
     mod_outlines_str = {
         mid: "\n".join(lines).rstrip() + "\n" for mid, lines in mod_outline_map.items()
     }
-    return "\n".join(outline_lines).rstrip() + "\n", mod_outlines_str, symbols, warnings
+    mod_test_outlines_str = {
+        mid: "\n".join(lines).rstrip() + "\n" for mid, lines in mod_test_outline_map.items()
+    }
+    return "\n".join(outline_lines).rstrip() + "\n", mod_outlines_str, mod_test_outlines_str, symbols, warnings
 
 
 def cmd_gen(cfg: AtlasConfig) -> int:
+    """Write the L3 index, including main and test shards and mount churn."""
     print(f"root: {cfg.root}")
     if cfg.config_path:
         print(f"config: {cfg.config_path}")
@@ -923,7 +1104,7 @@ def cmd_gen(cfg: AtlasConfig) -> int:
         for m in symlink_mounts[:10]:
             print(f"  {m['logical']} -> {m['target']}")
     hot = rank_hot_files(files, cfg.thresholds.hot_files_top)
-    outlines, mod_outlines, symbols, warnings = gen_outlines_and_symbols(cfg, files)
+    outlines, mod_outlines, mod_test_outlines, symbols, warnings = gen_outlines_and_symbols(cfg, files)
 
     ensure_dir(cfg.generated_dir)
     write_text(cfg.generated_dir / "tree.txt", gen_tree(files))
@@ -934,24 +1115,36 @@ def cmd_gen(cfg: AtlasConfig) -> int:
         json.dumps(symbols, indent=2, ensure_ascii=False) + "\n",
     )
     # also TSV for jq-less grepping + per-module sharded TSV & outlines for compact agent reads
-    tsv = ["symbol\tfile\tline\tkind\tlanguage\tmodule"]
-    mod_tsv: dict[str, list[str]] = {
-        mid: ["symbol\tfile\tline\tkind\tlanguage\tmodule"] for mid in cfg.modules.keys()
-    }
+    header = "symbol\tfile\tline\tkind\tlanguage\tmodule\towner\tsignature\trole"
+    tsv = [header]
+    mod_tsv: dict[str, list[str]] = {mid: [header] for mid in cfg.modules.keys()}
+    mod_test_tsv: dict[str, list[str]] = {mid: [header] for mid in cfg.modules.keys()}
     for s in symbols:
         mod_name = s.get("module") or "-"
-        row = f"{s['symbol']}\t{s['file']}\t{s['line']}\t{s['kind']}\t{s['language']}\t{mod_name}"
+        owner = s.get("owner") or ""
+        signature = s.get("signature") or ""
+        role = s.get("role") or "main"
+        row = (
+            f"{s['symbol']}\t{s['file']}\t{s['line']}\t{s['kind']}\t{s['language']}\t"
+            f"{mod_name}\t{owner}\t{signature}\t{role}"
+        )
         tsv.append(row)
-        if mod_name != "-":
-            mod_tsv.setdefault(mod_name, ["symbol\tfile\tline\tkind\tlanguage\tmodule"]).append(row)
+        if mod_name == "-":
+            continue
+        bucket = mod_test_tsv if role == "test" else mod_tsv
+        bucket.setdefault(mod_name, [header]).append(row)
     write_text(cfg.generated_dir / "symbols.tsv", "\n".join(tsv) + "\n")
 
     shards_dir = cfg.generated_dir / "modules"
     ensure_dir(shards_dir)
     for mid, rows in mod_tsv.items():
         write_text(shards_dir / f"{mid}-symbols.tsv", "\n".join(rows) + "\n")
+    for mid, rows in mod_test_tsv.items():
+        write_text(shards_dir / f"{mid}-tests-symbols.tsv", "\n".join(rows) + "\n")
     for mid, text in mod_outlines.items():
         write_text(shards_dir / f"{mid}-outlines.md", text)
+    for mid, text in mod_test_outlines.items():
+        write_text(shards_dir / f"{mid}-tests-outlines.md", text)
 
     # unmapped hot files
     unmapped_hot = [h.rel for h in hot if not h.module and cfg.modules]
@@ -1227,6 +1420,63 @@ def _print_findings(findings: list[Finding]) -> int:
 # Outline single file
 # ---------------------------------------------------------------------------
 
+def _tsv_column(header: dict[str, int], row: list[str], name: str) -> str:
+    index = header.get(name)
+    if index is None or index >= len(row):
+        return ""
+    return row[index]
+
+
+def _find_label(header: dict[str, int], row: list[str]) -> str:
+    symbol = _tsv_column(header, row, "symbol")
+    if "signature" not in header:
+        return symbol
+    owner = _tsv_column(header, row, "owner")
+    signature = _tsv_column(header, row, "signature")
+    if owner:
+        return f"{owner}.{signature}"
+    return signature
+
+
+def cmd_find(cfg: AtlasConfig, query: str, module: str | None) -> int:
+    """Print up to 20 symbol hits as module, role, owner.signature, and file:line.
+
+    A missing symbols.tsv asks for atlas gen and returns 2. No hit returns 1.
+    An older six-column TSV prints the bare symbol when it has no signature column.
+    """
+    path = cfg.generated_dir / "symbols.tsv"
+    if not path.is_file():
+        print("run atlas gen first", file=sys.stderr)
+        return 2
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not lines:
+        print("run atlas gen first", file=sys.stderr)
+        return 2
+    header = {name: index for index, name in enumerate(lines[0].split("\t"))}
+    printed = 0
+    for raw in lines[1:]:
+        if not raw.strip():
+            continue
+        row = raw.split("\t")
+        if module is not None and _tsv_column(header, row, "module") != module:
+            continue
+        symbol = _tsv_column(header, row, "symbol")
+        owner = _tsv_column(header, row, "owner")
+        signature = _tsv_column(header, row, "signature") if "signature" in header else ""
+        if query not in symbol and query not in owner and query not in signature:
+            continue
+        label = _find_label(header, row)
+        file_rel = _tsv_column(header, row, "file")
+        line_no = _tsv_column(header, row, "line")
+        role = _tsv_column(header, row, "role")
+        mod_name = _tsv_column(header, row, "module")
+        print(f"{mod_name}\t{role}\t{label}\t{file_rel}:{line_no}")
+        printed += 1
+        if printed >= 20:
+            break
+    return 0 if printed else 1
+
+
 def cmd_outline(cfg: AtlasConfig, file_rel: str) -> int:
     path = cfg.root / file_rel
     if not path.is_file():
@@ -1255,7 +1505,7 @@ def find_repo_root(start: Path | None = None) -> Path:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="atlas",
-        description="Code Atlas — navigation index toolkit (init / gen / validate)",
+        description="Code Atlas — navigation index toolkit (init / gen / validate / find)",
     )
     p.add_argument("--root", type=str, default=None, help="repository root (default: auto)")
     p.add_argument("--config", type=str, default=None, help="path to atlas.config.yaml")
@@ -1275,6 +1525,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     so = sub.add_parser("outline", help="print definition outline for one file")
     so.add_argument("file", help="file path relative to repo root")
+
+    sf = sub.add_parser("find", help="print up to 20 symbol hits from generated/symbols.tsv")
+    sf.add_argument("query", help="case-sensitive substring of symbol, owner, or signature")
+    sf.add_argument("--module", default=None, help="keep hits from this module id only")
 
     return p
 
@@ -1296,6 +1550,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_validate(cfg)
     if args.cmd == "outline":
         return cmd_outline(cfg, args.file)
+    if args.cmd == "find":
+        return cmd_find(cfg, args.query, args.module)
     print("unknown command", file=sys.stderr)
     return 2
 
