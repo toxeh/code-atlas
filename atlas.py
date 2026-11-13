@@ -840,13 +840,21 @@ def gen_hot_files_json(hot: list[FileInfo]) -> str:
 
 def gen_outlines_and_symbols(
     cfg: AtlasConfig, files: list[FileInfo]
-) -> tuple[str, list[dict[str, Any]], list[str]]:
+) -> tuple[str, dict[str, str], list[dict[str, Any]], list[str]]:
     outline_lines: list[str] = [
         "# Generated outlines (do not edit)",
         "",
         f"Threshold: files with lines >= {cfg.thresholds.outline_min_lines}",
         "",
     ]
+    mod_outline_map: dict[str, list[str]] = {}
+    for mid in cfg.modules.keys():
+        mod_outline_map[mid] = [
+            f"# Generated outlines — module {mid} (do not edit)",
+            "",
+            f"Threshold: files with lines >= {cfg.thresholds.outline_min_lines}",
+            "",
+        ]
     symbols: list[dict[str, Any]] = []
     warnings: list[str] = []
 
@@ -865,16 +873,26 @@ def gen_outlines_and_symbols(
 
         if f.lines >= cfg.thresholds.outline_min_lines:
             via = ", via_symlink" if f.via_symlink else ""
-            outline_lines.append(
-                f"## {f.rel} ({f.lines} lines, {f.language}, module={f.module or '-'}{via})"
-            )
-            outline_lines.append("")
+            block: list[str] = [
+                f"## {f.rel} ({f.lines} lines, {f.language}, module={f.module or '-'}{via})",
+                "",
+            ]
             if not syms:
-                outline_lines.append("_no definitions matched heuristics_")
+                block.append("_no definitions matched heuristics_")
             else:
                 for s in syms:
-                    outline_lines.append(f"- L{s.line}: `{s.kind}` **{s.symbol}**")
-            outline_lines.append("")
+                    block.append(f"- L{s.line}: `{s.kind}` **{s.symbol}**")
+            block.append("")
+            outline_lines.extend(block)
+            if f.module:
+                if f.module not in mod_outline_map:
+                    mod_outline_map[f.module] = [
+                        f"# Generated outlines — module {f.module} (do not edit)",
+                        "",
+                        f"Threshold: files with lines >= {cfg.thresholds.outline_min_lines}",
+                        "",
+                    ]
+                mod_outline_map[f.module].extend(block)
 
     # language coverage warning
     lang_files: dict[str, int] = defaultdict(int)
@@ -887,7 +905,10 @@ def gen_outlines_and_symbols(
         if nfiles >= 10 and lang_syms.get(lang, 0) == 0:
             warnings.append(f"language {lang}: {nfiles} files but 0 symbols extracted")
 
-    return "\n".join(outline_lines).rstrip() + "\n", symbols, warnings
+    mod_outlines_str = {
+        mid: "\n".join(lines).rstrip() + "\n" for mid, lines in mod_outline_map.items()
+    }
+    return "\n".join(outline_lines).rstrip() + "\n", mod_outlines_str, symbols, warnings
 
 
 def cmd_gen(cfg: AtlasConfig) -> int:
@@ -902,7 +923,7 @@ def cmd_gen(cfg: AtlasConfig) -> int:
         for m in symlink_mounts[:10]:
             print(f"  {m['logical']} -> {m['target']}")
     hot = rank_hot_files(files, cfg.thresholds.hot_files_top)
-    outlines, symbols, warnings = gen_outlines_and_symbols(cfg, files)
+    outlines, mod_outlines, symbols, warnings = gen_outlines_and_symbols(cfg, files)
 
     ensure_dir(cfg.generated_dir)
     write_text(cfg.generated_dir / "tree.txt", gen_tree(files))
@@ -912,13 +933,25 @@ def cmd_gen(cfg: AtlasConfig) -> int:
         cfg.generated_dir / "symbols.json",
         json.dumps(symbols, indent=2, ensure_ascii=False) + "\n",
     )
-    # also TSV for jq-less grepping
+    # also TSV for jq-less grepping + per-module sharded TSV & outlines for compact agent reads
     tsv = ["symbol\tfile\tline\tkind\tlanguage\tmodule"]
+    mod_tsv: dict[str, list[str]] = {
+        mid: ["symbol\tfile\tline\tkind\tlanguage\tmodule"] for mid in cfg.modules.keys()
+    }
     for s in symbols:
-        tsv.append(
-            f"{s['symbol']}\t{s['file']}\t{s['line']}\t{s['kind']}\t{s['language']}\t{s.get('module') or '-'}"
-        )
+        mod_name = s.get("module") or "-"
+        row = f"{s['symbol']}\t{s['file']}\t{s['line']}\t{s['kind']}\t{s['language']}\t{mod_name}"
+        tsv.append(row)
+        if mod_name != "-":
+            mod_tsv.setdefault(mod_name, ["symbol\tfile\tline\tkind\tlanguage\tmodule"]).append(row)
     write_text(cfg.generated_dir / "symbols.tsv", "\n".join(tsv) + "\n")
+
+    shards_dir = cfg.generated_dir / "modules"
+    ensure_dir(shards_dir)
+    for mid, rows in mod_tsv.items():
+        write_text(shards_dir / f"{mid}-symbols.tsv", "\n".join(rows) + "\n")
+    for mid, text in mod_outlines.items():
+        write_text(shards_dir / f"{mid}-outlines.md", text)
 
     # unmapped hot files
     unmapped_hot = [h.rel for h in hot if not h.module and cfg.modules]
